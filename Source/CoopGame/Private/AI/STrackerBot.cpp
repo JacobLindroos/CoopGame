@@ -10,6 +10,10 @@
 #include "NavigationSystem.h"
 #include <DrawDebugHelpers.h>
 #include "CoopGame/Components/SHealthComponent.h"
+#include "Components/SphereComponent.h"
+#include "SCharacter.h"
+#include "GameFramework/Actor.h"
+#include "Sound/SoundCue.h"
 
 // Sets default values
 ASTrackerBot::ASTrackerBot()
@@ -17,19 +21,30 @@ ASTrackerBot::ASTrackerBot()
  	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
+	//Mesh material setup
 	MeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MeshComp"));
 	MeshComp->SetCanEverAffectNavigation(false);
 	MeshComp->SetSimulatePhysics(true);
 	RootComponent = MeshComp;
 
+	//Health setup
 	HealthComp = CreateDefaultSubobject<USHealthComponent>(TEXT("HealthComp"));
 	HealthComp->OnHealthChanged.AddDynamic(this, &ASTrackerBot::HandleTakeDamage);
+
+	//Sphere collision setup
+	SphereComp = CreateDefaultSubobject<USphereComponent>(TEXT("SphereComp"));
+	SphereComp->SetSphereRadius(200.f);
+	SphereComp->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	SphereComp->SetCollisionResponseToAllChannels(ECR_Ignore);
+	SphereComp->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	SphereComp->SetupAttachment(RootComponent);
 
 	bUseVelocityChange = false;
 	MovementForce = 1000.f;
 	RequiredDistanceToTarget = 100.f;
 	ExplosionRadius = 200.f;
 	ExplosionDamage = 40.f;
+	SelfDamageInterval = 0.25f;
 }
 
 
@@ -89,6 +104,7 @@ FVector ASTrackerBot::GetNextPawnPoint()
 }
 
 
+//Handles effect and sound on self destruction and apply damage to nearby actors 
 void ASTrackerBot::SelfDestruct()
 {
 	//Make sure we don't explode a second time
@@ -112,9 +128,19 @@ void ASTrackerBot::SelfDestruct()
 	//Draw a debug sphere line for the explosion, just for visual 
 	DrawDebugSphere(GetWorld(), GetActorLocation(), ExplosionRadius, 12.f, FColor::Red, false, 2.f, 0, 1.f);
 
+	//Plays explosion sound where it exploded
+	UGameplayStatics::PlaySoundAtLocation(this, ExplodeSound, GetActorLocation());
+
 	//Delete Actor immediately
 	Destroy();
 	
+}
+
+
+//Apply damage to self
+void ASTrackerBot::DamageSelf()
+{	
+	UGameplayStatics::ApplyDamage(this, 20.f, GetInstigatorController(), this, nullptr);
 }
 
 
@@ -147,4 +173,26 @@ void ASTrackerBot::Tick(float DeltaTime)
 
 	DrawDebugSphere(GetWorld(), NextPathPoint,20.f,12, FColor::Yellow, false, 4.f, 1.f);
 
+}
+
+
+//When player overlap a timer is started that calls DamageSelf()
+void ASTrackerBot::NotifyActorBeginOverlap(AActor* OtherActor)
+{
+	if (!bStartedSelfDestruction)
+	{
+		ASCharacter* PlayerPawn = Cast<ASCharacter>(OtherActor);
+		if (PlayerPawn)
+		{
+			//If we overlapped with a player!
+
+			//Start self destruction sequence
+			GetWorldTimerManager().SetTimer(TimerHandel_SelfDamage, this, &ASTrackerBot::DamageSelf, SelfDamageInterval, true, 0.f);
+			
+			bStartedSelfDestruction = true;
+
+			//Sound attached just to make the sound follow along the tracker bot when it moves around
+			UGameplayStatics::SpawnSoundAttached(SelfDestructSound, RootComponent);
+		}
+	}
 }
